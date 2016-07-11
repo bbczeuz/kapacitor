@@ -1,7 +1,7 @@
 import sys
 import json
-from agent import Agent, Handler
-import udf_pb2
+from kapacitor.udf.agent import Agent, Handler
+from kapacitor.udf import udf_pb2
 
 import logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(name)s: %(message)s')
@@ -67,6 +67,7 @@ class OutliersHandler(Handler):
         self._field = None
         self._scale = 1.5
         self._state = OutliersHandler.state()
+        self._begin_response = None
 
 
     def info(self):
@@ -119,17 +120,23 @@ class OutliersHandler(Handler):
     def begin_batch(self, begin_req):
         self._state.reset()
 
-        # Send an identical begin batch back to Kapacitor
+        # Keep copy of begin_batch
         response = udf_pb2.Response()
         response.begin.CopyFrom(begin_req)
-        self._agent.write_response(response)
+        self._begin_response = response
 
     def point(self, point):
         value = point.fieldsDouble[self._field]
         self._state.update(value, point)
 
     def end_batch(self, end_req):
+        # Get outliers
         outliers = self._state.outliers(self._scale)
+
+        # Send begin batch with count of outliers
+        self._begin_response.begin.size = len(outliers)
+        self._agent.write_response(self._begin_response)
+
         response = udf_pb2.Response()
         for outlier in outliers:
             response.point.CopyFrom(outlier)

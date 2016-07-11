@@ -1,6 +1,14 @@
 # Changelog
 
-## v1.0.0-beta3 [unreleased]
+## v1.0.0-beta4 [unreleased]
+
+### Release Notes
+
+### Features
+
+### Bugfixes
+
+## v1.0.0-beta3 [2016-07-09]
 
 ### Release Notes
 
@@ -10,7 +18,12 @@
 - [#680](https://github.com/influxdata/kapacitor/pull/680): Add Telegram Alerting option
 - [#46](https://github.com/influxdata/kapacitor/issue/46): Can now create combinations of points within the same stream.
 	This is kind of like join but instead joining a stream with itself.
-
+- [#669](https://github.com/influxdata/kapacitor/pull/669): Add size function for humanize byte size. thanks @jsvisa!
+- [#697](https://github.com/influxdata/kapacitor/pull/697): Can now flatten a set of points into a single points creating dynamcially named fields.
+- [#698](https://github.com/influxdata/kapacitor/pull/698): Join delimiter can be specified.
+- [#695](https://github.com/influxdata/kapacitor/pull/695): Bash completion filters by enabled disabled status. Thanks @bbczeuz!
+- [#706](https://github.com/influxdata/kapacitor/pull/706): Package UDF agents
+- [#707](https://github.com/influxdata/kapacitor/pull/707): Add size field to BeginBatch struct of UDF protocol. Provides hint as to size of incoming batch.
 
 ### Bugfixes
 
