@@ -13,11 +13,11 @@ import (
 type EdgeType int
 
 const (
-	// No data is transferred
+	// No data are transferred.
 	NoEdge EdgeType = iota
-	// Data is transferred immediately and one point at a time.
+	// Data are transferred immediately and one point at a time.
 	StreamEdge
-	// Data is transferred in batches as soon as it is ready.
+	// Data are transferred in batches as soon as the data are ready.
 	BatchEdge
 )
 
@@ -201,7 +201,7 @@ func (n *node) Stats(interval time.Duration) *StatsNode {
 const nodeNameMarker = "NODE_NAME"
 const intervalMarker = "INTERVAL"
 
-// Helper function for creating an alert on low throughput, aka deadman's switch.
+// Helper function for creating an alert on low throughput, a.k.a. deadman's switch.
 //
 // - Threshold -- trigger alert if throughput drops below threshold in points/interval.
 // - Interval -- how often to check the throughput.
@@ -236,7 +236,7 @@ const intervalMarker = "INTERVAL"
 //
 // The `id` and `message` alert properties can be configured globally via the 'deadman' configuration section.
 //
-// Since the AlertNode is the last piece it can be further modified as normal.
+// Since the AlertNode is the last piece it can be further modified as usual.
 // Example:
 //    var data = stream
 //        |from()...
@@ -280,7 +280,7 @@ func (n *node) Deadman(threshold float64, interval time.Duration, expr ...*ast.L
 		critExpr = &ast.BinaryNode{
 			Operator: ast.TokenAnd,
 			Left:     critExpr,
-			Right:    e,
+			Right:    e.Expression,
 		}
 	}
 	an.Crit = &ast.LambdaNode{Expression: critExpr}
@@ -315,11 +315,11 @@ func (n *chainnode) Where(expression *ast.LambdaNode) *WhereNode {
 	return w
 }
 
-// Create an http output node that caches the most recent data it has received.
-// The cached data is available at the given endpoint.
+// Create an HTTP output node that caches the most recent data it has received.
+// The cached data are available at the given endpoint.
 // The endpoint is the relative path from the API endpoint of the running task.
-// For example if the task endpoint is at "/api/v1/task/<task_name>" and endpoint is
-// "top10", then the data can be requested from "/api/v1/task/<task_name>/top10".
+// For example, if the task endpoint is at `/kapacitor/v1/tasks/<task_id>` and endpoint is
+// `top10`, then the data can be requested from `/kapacitor/v1/tasks/<task_id>/top10`.
 func (n *chainnode) HttpOut(endpoint string) *HTTPOutNode {
 	h := newHTTPOutNode(n.provides, endpoint)
 	n.linkChild(h)
@@ -347,14 +347,14 @@ func (n *chainnode) Union(node ...Node) *UnionNode {
 	return u
 }
 
-// Join this node with other nodes. The data is joined on timestamp.
+// Join this node with other nodes. The data are joined on timestamp.
 func (n *chainnode) Join(others ...Node) *JoinNode {
 	others = append([]Node{n}, others...)
 	j := newJoinNode(n.provides, others)
 	return j
 }
 
-// Combine this node with itself. The data is combine on timestamp.
+// Combine this node with itself. The data are combined on timestamp.
 func (n *chainnode) Combine(expressions ...*ast.LambdaNode) *CombineNode {
 	c := newCombineNode(n.provides, expressions)
 	n.linkChild(c)
@@ -369,8 +369,8 @@ func (n *chainnode) Flatten() *FlattenNode {
 }
 
 // Create an eval node that will evaluate the given transformation function to each data point.
-//  A list of expressions may be provided and will be evaluated in the order they are given
-// and results of previous expressions are made available to later expressions.
+// A list of expressions may be provided and will be evaluated in the order they are given.
+// The results are available to later expressions.
 func (n *chainnode) Eval(expressions ...*ast.LambdaNode) *EvalNode {
 	e := newEvalNode(n.provides, expressions)
 	n.linkChild(e)
@@ -434,6 +434,13 @@ func (n *chainnode) Log() *LogNode {
 // Create a node that can set defaults for missing tags or fields.
 func (n *chainnode) Default() *DefaultNode {
 	s := newDefaultNode(n.Provides())
+	n.linkChild(s)
+	return s
+}
+
+// Create a node that can delete tags or fields.
+func (n *chainnode) Delete() *DeleteNode {
+	s := newDeleteNode(n.Provides())
 	n.linkChild(s)
 	return s
 }

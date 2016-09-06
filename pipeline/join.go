@@ -84,6 +84,42 @@ type JoinNode struct {
 	//   - none - (default) skip rows where a point is missing, inner join.
 	//   - null - fill missing points with null, full outer join.
 	//   - Any numerical value - fill fields with given value, full outer join.
+	//
+	// When using a numerical or null fill, the fields names are determined by copying
+	// the field names from another point.
+	// This doesn't work well when different sources have different field names.
+	// Use the DefaultNode and DeleteNode to finalize the fill operation if necessary.
+	//
+	// Example:
+	//    var maintlock = stream
+	//        |from()
+	//            .measurement('maintlock')
+	//            .groupBy('service')
+	//    var requests = stream
+	//        |from()
+	//            .measurement('requests')
+	//            .groupBy('service')
+	//    // Join the maintlock and requests streams
+	//    // The intent it to drop any points in maintenance mode.
+	//    maintlock
+	//        |join(requests)
+	//            // Provide prefix names for the fields of the data points.
+	//            .as('maintlock', 'requests')
+	//            // points that are within 1 second are considered the same time.
+	//            .tolerance(1s)
+	//            // fill missing fields with null, implies outer join.
+	//            // a better default per field will be set later.
+	//            .fill('null')
+	//            // name the resulting stream.
+	//            .streamName('requests')
+	//        |default()
+	//            // default maintenance mode to false, overwriting the null value if present.
+	//            .field('maintlock.mode', false)
+	//            // default the requests to 0, again overwriting the null value if present.
+	//            .field('requests.value', 0.0)
+	//        // drop any points that are in maintenance mode.
+	//        |where(lambda: "maintlock.mode")
+	//        |...
 	Fill interface{}
 }
 
@@ -110,16 +146,24 @@ func (j *JoinNode) As(names ...string) *JoinNode {
 	return j
 }
 
-// Join on specific dimensions.
+// Join on a subset of the group by dimensions.
+// This is a special case where you want a single point from one parent to join with multiple
+// points from a different parent.
+//
 // For example given two measurements:
 //
-// 1. building_power -- tagged by building, value is the total power consumed by the building.
-// 2. floor_power -- tagged by building and floor, values is the total power consumed by the floor.
+// 1. building_power (a single value) -- tagged by building, value is the total power consumed by the building.
+// 2. floor_power (multiple values) -- tagged by building and floor, values are the total power consumed by each floor.
 //
 // You want to calculate the percentage of the total building power consumed by each floor.
+// Since you only have one point per building you need it to join multiple times with
+// the points from each floor. By defining the `on` dimensions as `building` we are saying
+// that we want points that only have the building tag to be joined with more specifc points that
+// more tags, in this case the `floor` tag. In other words while we have points with tags building and floor
+// we only want to join on the building tag.
 //
 // Example:
-//    var buidling = stream
+//    var building = stream
 //        |from()
 //            .measurement('building_power')
 //            .groupBy('building')

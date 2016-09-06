@@ -12,8 +12,8 @@ import (
 // An InfluxQLNode performs the available function from the InfluxQL language.
 // These function can be performed on a stream or batch edge.
 // The resulting edge is dependent on the function.
-// For a stream edge all points with the same time are accumulated into the function.
-// For a batch edge all points in the batch are accumulated into the function.
+// For a stream edge, all points with the same time are accumulated into the function.
+// For a batch edge, all points in the batch are accumulated into the function.
 //
 //
 // Example:
@@ -136,7 +136,7 @@ func (n *chainnode) Mean(field string) *InfluxQLNode {
 }
 
 // Compute the median of the data. Note, this method is not a selector,
-// if you want the median point use .percentile(field, 50.0).
+// if you want the median point use `.percentile(field, 50.0)`.
 func (n *chainnode) Median(field string) *InfluxQLNode {
 	i := newInfluxQLNode("median", field, n.Provides(), StreamEdge, ReduceCreater{
 		CreateFloatBulkReducer: func() (FloatBulkPointAggregator, influxql.FloatPointEmitter) {
@@ -152,7 +152,23 @@ func (n *chainnode) Median(field string) *InfluxQLNode {
 	return i
 }
 
-// Compute the difference between min and max points.
+// Compute the mode of the data.
+func (n *chainnode) Mode(field string) *InfluxQLNode {
+	i := newInfluxQLNode("mode", field, n.Provides(), StreamEdge, ReduceCreater{
+		CreateFloatBulkReducer: func() (FloatBulkPointAggregator, influxql.FloatPointEmitter) {
+			fn := influxql.NewFloatSliceFuncReducer(influxql.FloatModeReduceSlice)
+			return fn, fn
+		},
+		CreateIntegerBulkReducer: func() (IntegerBulkPointAggregator, influxql.IntegerPointEmitter) {
+			fn := influxql.NewIntegerSliceFuncReducer(influxql.IntegerModeReduceSlice)
+			return fn, fn
+		},
+	})
+	n.linkChild(i)
+	return i
+}
+
+// Compute the difference between `min` and `max` points.
 func (n *chainnode) Spread(field string) *InfluxQLNode {
 	i := newInfluxQLNode("spread", field, n.Provides(), StreamEdge, ReduceCreater{
 		CreateFloatBulkReducer: func() (FloatBulkPointAggregator, influxql.FloatPointEmitter) {
@@ -402,12 +418,48 @@ func (n *chainnode) Elapsed(field string, unit time.Duration) *InfluxQLNode {
 	return i
 }
 
+// Compute the difference between points independent of elapsed time.
+func (n *chainnode) Difference(field string) *InfluxQLNode {
+	i := newInfluxQLNode("difference", field, n.Provides(), n.Provides(), ReduceCreater{
+		CreateFloatReducer: func() (influxql.FloatPointAggregator, influxql.FloatPointEmitter) {
+			fn := influxql.NewFloatDifferenceReducer()
+			return fn, fn
+		},
+		CreateIntegerReducer: func() (influxql.IntegerPointAggregator, influxql.IntegerPointEmitter) {
+			fn := influxql.NewIntegerDifferenceReducer()
+			return fn, fn
+		},
+		IsStreamTransformation: true,
+	})
+	n.linkChild(i)
+	return i
+}
+
+// Compute a moving average of the last window points.
+// No points are emitted until the window is full.
+func (n *chainnode) MovingAverage(field string, window int64) *InfluxQLNode {
+	i := newInfluxQLNode("movingAverage", field, n.Provides(), n.Provides(), ReduceCreater{
+		CreateFloatReducer: func() (influxql.FloatPointAggregator, influxql.FloatPointEmitter) {
+			fn := influxql.NewFloatMovingAverageReducer(int(window))
+			return fn, fn
+		},
+		CreateIntegerFloatReducer: func() (influxql.IntegerPointAggregator, influxql.FloatPointEmitter) {
+			fn := influxql.NewIntegerMovingAverageReducer(int(window))
+			return fn, fn
+		},
+		IsStreamTransformation: true,
+	})
+	n.linkChild(i)
+	return i
+}
+
 // Compute the holt-winters forecast of a data set.
 func (n *chainnode) HoltWinters(field string, h, m int64, interval time.Duration) *InfluxQLNode {
 	return n.holtWinters(field, h, m, interval, false)
 }
 
 // Compute the holt-winters forecast of a data set.
+// This method also outputs all the points used to fit the data in addition to the forecasted data.
 func (n *chainnode) HoltWintersWithFit(field string, h, m int64, interval time.Duration) *InfluxQLNode {
 	return n.holtWinters(field, h, m, interval, true)
 }

@@ -25,19 +25,21 @@ const DefaultUserAgent = "KapacitorClient"
 // The only exception is if you only have an ID for a resource
 // then use the appropriate *Link methods.
 
-const basePath = "/kapacitor/v1"
-const pingPath = basePath + "/ping"
-const logLevelPath = basePath + "/loglevel"
-const debugVarsPath = basePath + "/debug/vars"
-const tasksPath = basePath + "/tasks"
-const templatesPath = basePath + "/templates"
-const recordingsPath = basePath + "/recordings"
-const recordStreamPath = basePath + "/recordings/stream"
-const recordBatchPath = basePath + "/recordings/batch"
-const recordQueryPath = basePath + "/recordings/query"
-const replaysPath = basePath + "/replays"
-const replayBatchPath = basePath + "/replays/batch"
-const replayQueryPath = basePath + "/replays/query"
+const (
+	basePath         = "/kapacitor/v1"
+	pingPath         = basePath + "/ping"
+	logLevelPath     = basePath + "/loglevel"
+	debugVarsPath    = basePath + "/debug/vars"
+	tasksPath        = basePath + "/tasks"
+	templatesPath    = basePath + "/templates"
+	recordingsPath   = basePath + "/recordings"
+	recordStreamPath = basePath + "/recordings/stream"
+	recordBatchPath  = basePath + "/recordings/batch"
+	recordQueryPath  = basePath + "/recordings/query"
+	replaysPath      = basePath + "/replays"
+	replayBatchPath  = basePath + "/replays/batch"
+	replayQueryPath  = basePath + "/replays/query"
+)
 
 // HTTP configuration for connecting to Kapacitor
 type Config struct {
@@ -57,13 +59,60 @@ type Config struct {
 	// TLSConfig allows the user to set their own TLS config for the HTTP
 	// Client. If set, this option overrides InsecureSkipVerify.
 	TLSConfig *tls.Config
+
+	// Optional credentials for authenticating with the server.
+	Credentials *Credentials
+}
+
+// AuthenticationMethod defines the type of authentication used.
+type AuthenticationMethod int
+
+// Supported authentication methods.
+const (
+	_ AuthenticationMethod = iota
+	UserAuthentication
+	BearerAuthentication
+)
+
+// Set of credentials depending on the authentication method
+type Credentials struct {
+	Method AuthenticationMethod
+
+	// UserAuthentication fields
+
+	Username string
+	Password string
+
+	// BearerAuthentication fields
+
+	Token string
+}
+
+func (c Credentials) Validate() error {
+	switch c.Method {
+	case UserAuthentication:
+		if c.Username == "" {
+			return errors.New("missing username")
+		}
+		if c.Password == "" {
+			return errors.New("missing password")
+		}
+	case BearerAuthentication:
+		if c.Token == "" {
+			return errors.New("missing token")
+		}
+	default:
+		return errors.New("missing authentication method")
+	}
+	return nil
 }
 
 // Basic HTTP client
 type Client struct {
-	url        *url.URL
-	userAgent  string
-	httpClient *http.Client
+	url         *url.URL
+	userAgent   string
+	httpClient  *http.Client
+	credentials *Credentials
 }
 
 // Create a new client.
@@ -82,6 +131,12 @@ func New(conf Config) (*Client, error) {
 		)
 	}
 
+	if conf.Credentials != nil {
+		if err := conf.Credentials.Validate(); err != nil {
+			return nil, errors.Wrap(err, "invalid credentials")
+		}
+	}
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: conf.InsecureSkipVerify,
@@ -97,6 +152,7 @@ func New(conf Config) (*Client, error) {
 			Timeout:   conf.Timeout,
 			Transport: tr,
 		},
+		credentials: conf.Credentials,
 	}, nil
 }
 
@@ -545,11 +601,25 @@ func (c *Client) URL() string {
 	return c.url.String()
 }
 
+func (c *Client) BaseURL() url.URL {
+	return *c.url
+}
+
 // Perform the request.
 // If result is not nil the response body is JSON decoded into result.
 // Codes is a list of valid response codes.
-func (c *Client) do(req *http.Request, result interface{}, codes ...int) (*http.Response, error) {
+func (c *Client) Do(req *http.Request, result interface{}, codes ...int) (*http.Response, error) {
 	req.Header.Set("User-Agent", c.userAgent)
+	if c.credentials != nil {
+		switch c.credentials.Method {
+		case UserAuthentication:
+			req.SetBasicAuth(c.credentials.Username, c.credentials.Password)
+		case BearerAuthentication:
+			req.Header.Set("Authorization", "Bearer "+c.credentials.Token)
+		default:
+			return nil, errors.New("unknown authentication method set")
+		}
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -601,7 +671,7 @@ func (c *Client) Ping() (time.Duration, string, error) {
 		return 0, "", err
 	}
 
-	resp, err := c.do(req, nil, http.StatusNoContent)
+	resp, err := c.Do(req, nil, http.StatusNoContent)
 	if err != nil {
 		return 0, "", err
 	}
@@ -644,9 +714,10 @@ func (c *Client) CreateTask(opt CreateTaskOptions) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
 	t := Task{}
-	_, err = c.do(req, &t, http.StatusOK)
+	_, err = c.Do(req, &t, http.StatusOK)
 	return t, err
 }
 
@@ -682,8 +753,9 @@ func (c *Client) UpdateTask(link Link, opt UpdateTaskOptions) (Task, error) {
 	if err != nil {
 		return t, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &t, http.StatusOK)
+	_, err = c.Do(req, &t, http.StatusOK)
 	if err != nil {
 		return t, err
 	}
@@ -737,7 +809,7 @@ func (c *Client) Task(link Link, opt *TaskOptions) (Task, error) {
 		return task, err
 	}
 
-	_, err = c.do(req, &task, http.StatusOK)
+	_, err = c.Do(req, &task, http.StatusOK)
 	if err != nil {
 		return task, err
 	}
@@ -758,7 +830,7 @@ func (c *Client) DeleteTask(link Link) error {
 		return err
 	}
 
-	_, err = c.do(req, nil, http.StatusNoContent)
+	_, err = c.Do(req, nil, http.StatusNoContent)
 	return err
 }
 
@@ -811,7 +883,7 @@ func (c *Client) ListTasks(opt *ListTasksOptions) ([]Task, error) {
 
 	r := &response{}
 
-	_, err = c.do(req, r, http.StatusOK)
+	_, err = c.Do(req, r, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
@@ -827,7 +899,7 @@ func (c *Client) TaskOutput(link Link, name string) (*influxql.Result, error) {
 		return nil, err
 	}
 	r := &influxql.Result{}
-	_, err = c.do(req, r, http.StatusOK)
+	_, err = c.Do(req, r, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
@@ -857,9 +929,10 @@ func (c *Client) CreateTemplate(opt CreateTemplateOptions) (Template, error) {
 	if err != nil {
 		return Template{}, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
 	t := Template{}
-	_, err = c.do(req, &t, http.StatusOK)
+	_, err = c.Do(req, &t, http.StatusOK)
 	return t, err
 }
 
@@ -891,8 +964,9 @@ func (c *Client) UpdateTemplate(link Link, opt UpdateTemplateOptions) (Template,
 	if err != nil {
 		return t, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &t, http.StatusOK)
+	_, err = c.Do(req, &t, http.StatusOK)
 	if err != nil {
 		return t, err
 	}
@@ -938,7 +1012,7 @@ func (c *Client) Template(link Link, opt *TemplateOptions) (Template, error) {
 		return template, err
 	}
 
-	_, err = c.do(req, &template, http.StatusOK)
+	_, err = c.Do(req, &template, http.StatusOK)
 	if err != nil {
 		return template, err
 	}
@@ -959,7 +1033,7 @@ func (c *Client) DeleteTemplate(link Link) error {
 		return err
 	}
 
-	_, err = c.do(req, nil, http.StatusNoContent)
+	_, err = c.Do(req, nil, http.StatusNoContent)
 	return err
 }
 
@@ -1012,7 +1086,7 @@ func (c *Client) ListTemplates(opt *ListTemplatesOptions) ([]Template, error) {
 
 	r := &response{}
 
-	_, err = c.do(req, r, http.StatusOK)
+	_, err = c.Do(req, r, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,7 +1108,7 @@ func (c *Client) Recording(link Link) (Recording, error) {
 		return r, err
 	}
 
-	_, err = c.do(req, &r, http.StatusOK, http.StatusAccepted)
+	_, err = c.Do(req, &r, http.StatusOK, http.StatusAccepted)
 	if err != nil {
 		return r, err
 	}
@@ -1070,8 +1144,9 @@ func (c *Client) RecordStream(opt RecordStreamOptions) (Recording, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1104,8 +1179,9 @@ func (c *Client) RecordBatch(opt RecordBatchOptions) (Recording, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1139,8 +1215,9 @@ func (c *Client) RecordQuery(opt RecordQueryOptions) (Recording, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1160,7 +1237,7 @@ func (c *Client) DeleteRecording(link Link) error {
 		return err
 	}
 
-	_, err = c.do(req, nil, http.StatusNoContent)
+	_, err = c.Do(req, nil, http.StatusNoContent)
 	return err
 }
 
@@ -1210,7 +1287,7 @@ func (c *Client) ListRecordings(opt *ListRecordingsOptions) ([]Recording, error)
 
 	r := &response{}
 
-	_, err = c.do(req, r, http.StatusOK)
+	_, err = c.Do(req, r, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,8 +1329,9 @@ func (c *Client) CreateReplay(opt CreateReplayOptions) (Replay, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1287,8 +1365,9 @@ func (c *Client) ReplayBatch(opt ReplayBatchOptions) (Replay, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1322,8 +1401,9 @@ func (c *Client) ReplayQuery(opt ReplayQueryOptions) (Replay, error) {
 	if err != nil {
 		return r, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, &r, http.StatusCreated)
+	_, err = c.Do(req, &r, http.StatusCreated)
 	if err != nil {
 		return r, err
 	}
@@ -1345,7 +1425,7 @@ func (c *Client) Replay(link Link) (Replay, error) {
 		return r, err
 	}
 
-	_, err = c.do(req, &r, http.StatusOK, http.StatusAccepted)
+	_, err = c.Do(req, &r, http.StatusOK, http.StatusAccepted)
 	if err != nil {
 		return r, err
 	}
@@ -1365,7 +1445,7 @@ func (c *Client) DeleteReplay(link Link) error {
 		return err
 	}
 
-	_, err = c.do(req, nil, http.StatusNoContent)
+	_, err = c.Do(req, nil, http.StatusNoContent)
 	if err != nil {
 		return err
 	}
@@ -1418,7 +1498,7 @@ func (c *Client) ListReplays(opt *ListReplaysOptions) ([]Replay, error) {
 
 	r := &response{}
 
-	_, err = c.do(req, r, http.StatusOK)
+	_, err = c.Do(req, r, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
@@ -1447,8 +1527,9 @@ func (c *Client) LogLevel(level string) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
-	_, err = c.do(req, nil, http.StatusNoContent)
+	_, err = c.Do(req, nil, http.StatusNoContent)
 	return err
 }
 
@@ -1482,6 +1563,6 @@ func (c *Client) DebugVars() (DebugVars, error) {
 	}
 
 	vars := DebugVars{}
-	_, err = c.do(req, &vars, http.StatusOK)
+	_, err = c.Do(req, &vars, http.StatusOK)
 	return vars, err
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -87,6 +88,9 @@ func init() {
 
 	// Humanize functions
 	statelessFuncs["humanBytes"] = &humanBytes{}
+
+	// Conditionals
+	statelessFuncs["if"] = &ifFunc{}
 }
 
 // Return set of built-in Funcs
@@ -446,7 +450,7 @@ func (s *sigma) Call(args ...interface{}) (interface{}, error) {
 	s.m2 = s.m2 + delta*(x-s.mean)
 	s.variance = s.m2 / (s.n - 1)
 
-	if s.n < 2 {
+	if s.n < 2 || s.variance == 0 {
 		return float64(0), nil
 	}
 	return math.Abs(x-s.mean) / math.Sqrt(s.variance), nil
@@ -623,4 +627,34 @@ func (*humanBytes) Call(args ...interface{}) (v interface{}, err error) {
 		err = fmt.Errorf("cannot convert %T to humanBytes", a)
 	}
 	return
+}
+
+type ifFunc struct {
+}
+
+func (*ifFunc) Reset() {
+
+}
+
+func (*ifFunc) Call(args ...interface{}) (interface{}, error) {
+	if len(args) != 3 {
+		return nil, errors.New("if expects exactly three arguments")
+	}
+
+	var condition bool
+	var isBool bool
+
+	if condition, isBool = args[0].(bool); !isBool {
+		return nil, fmt.Errorf("first argument to if must be a condition with type of bool - got %T", args[0])
+	}
+
+	if reflect.TypeOf(args[1]) != reflect.TypeOf(args[2]) {
+		return nil, fmt.Errorf("Different return types are not supported - second argument is %T and third argument is %T", args[1], args[2])
+	}
+
+	if condition {
+		return args[1], nil
+	}
+
+	return args[2], nil
 }

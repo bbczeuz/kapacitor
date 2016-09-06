@@ -1,12 +1,160 @@
 # Changelog
 
-## v1.0.0-beta4 [unreleased]
+## v1.0.0 [2016-09-02]
+
+### Release Notes
+
+Final release of v1.0.0.
+
+## v1.0.0-rc3 [2016-09-01]
 
 ### Release Notes
 
 ### Features
 
 ### Bugfixes
+
+- [#842](https://github.com/influxdata/kapacitor/issues/842): Fix side-effecting modification in batch WhereNode.
+
+## v1.0.0-rc2 [2016-08-29]
+
+### Release Notes
+
+### Features
+
+- [#827](https://github.com/influxdata/kapacitor/issues/827): Bring Kapacitor up to parody with available InfluxQL functions in 1.0
+
+### Bugfixes
+
+- [#763](https://github.com/influxdata/kapacitor/issues/763): Fix NaNs begin returned from the `sigma` stateful function.
+- [#468](https://github.com/influxdata/kapacitor/issues/468): Fix tickfmt munging escaped slashes in regexes.
+
+## v1.0.0-rc1 [2016-08-22]
+
+### Release Notes
+
+#### Alert reset expressions
+
+Kapacitor now supports alert reset expressions.
+This way when an alert enters a state, it can only be lowered in severity if its reset expression evaluates to true.
+
+Example:
+
+```go
+stream
+    |from()
+      .measurement('cpu')
+      .where(lambda: "host" == 'serverA')
+      .groupBy('host')
+    |alert()
+      .info(lambda: "value" > 60)
+      .infoReset(lambda: "value" < 50)
+      .warn(lambda: "value" > 70)
+      .warnReset(lambda: "value" < 60)
+      .crit(lambda: "value" > 80)
+      .critReset(lambda: "value" < 70)
+```
+
+For example given the following values:
+
+    61 73 64 85 62 56 47
+
+The corresponding alert states are:
+
+    INFO WARNING WARNING CRITICAL INFO INFO OK
+
+### Features
+
+- [#740](https://github.com/influxdata/kapacitor/pull/740): Support reset expressions to prevent an alert from being lowered in severity. Thanks @minhdanh!
+- [#670](https://github.com/influxdata/kapacitor/issues/670): Add ability to supress OK recovery alert events.
+- [#804](https://github.com/influxdata/kapacitor/pull/804): Add API endpoint for refreshing subscriptions.
+    Also fixes issue where subs were not relinked if the sub was deleted.
+    UDP listen ports are closed when a database is dropped.
+
+### Bugfixes
+
+- [#783](https://github.com/influxdata/kapacitor/pull/783): Fix panic when revoking tokens not already defined.
+- [#784](https://github.com/influxdata/kapacitor/pull/784): Fix several issues with comment formatting in TICKscript.
+- [#786](https://github.com/influxdata/kapacitor/issues/786): Deleting tags now updates the group by dimensions if needed.
+- [#772](https://github.com/influxdata/kapacitor/issues/772): Delete task snapshot data when a task is deleted.
+- [#797](https://github.com/influxdata/kapacitor/issues/797): Fix panic from race condition in task master.
+- [#811](https://github.com/influxdata/kapacitor/pull/811): Fix bug where subscriptions + tokens would not work with more than one InfluxDB cluster.
+- [#812](https://github.com/influxdata/kapacitor/issues/812): Upgrade to use protobuf version 3.0.0
+
+## v1.0.0-beta4 [2016-07-27]
+
+### Release Notes
+
+#### Group By Fields
+
+Kapacitor now supports grouping by fields.
+First convert a field into a tag using the EvalNode.
+Then group by the new tag.
+
+Example:
+
+```go
+stream
+    |from()
+        .measurement('alerts')
+    // Convert field 'level' to tag.
+    |eval(lambda: string("level"))
+        .as('level')
+        .tags('level')
+    // Group by new tag 'level'.
+    |groupBy('alert', 'level')
+    |...
+```
+
+Note the field `level` is now removed from the point since `.keep` was not used.
+See the [docs](https://docs.influxdata.com/kapacitor/v1.0/nodes/eval_node/#tags) for more details on how `.tags` works.
+
+
+#### Delete Fields or Tags
+
+In companion with being able to create new tags, you can now delete tags or fields.
+
+
+Example:
+
+```go
+stream
+    |from()
+        .measurement('alerts')
+    |delete()
+        // Remove the field `extra` and tag `uuid` from all points.
+        .field('extra')
+        .tag('uuid')
+    |...
+```
+
+
+
+### Features
+
+- [#702](https://github.com/influxdata/kapacitor/pull/702): Add plumbing for authentication backends.
+- [#624](https://github.com/influxdata/kapacitor/issue/624): BREAKING: Add ability to GroupBy fields. First use EvalNode to create a tag from a field and then group by the new tag.
+    Also allows for grouping by measurement.
+    The breaking change is that the group ID format has changed to allow for the measurement name.
+- [#759](https://github.com/influxdata/kapacitor/pull/759): Add mechanism for token based subscription auth.
+- [#745](https://github.com/influxdata/kapacitor/pull/745): Add if function for tick script, for example: `if("value" > 6, 1, 2)`.
+
+### Bugfixes
+
+- [#710](https://github.com/influxdata/kapacitor/pull/710): Fix infinite loop when parsing unterminated regex in TICKscript.
+- [#711](https://github.com/influxdata/kapacitor/issues/711): Fix where database name with quotes breaks subscription startup logic.
+- [#719](https://github.com/influxdata/kapacitor/pull/719): Fix panic on replay.
+- [#723](https://github.com/influxdata/kapacitor/pull/723): BREAKING: Search for valid configuration on startup in ~/.kapacitor and /etc/kapacitor/.
+    This is so that the -config CLI flag is not required if the configuration is found in a standard location.
+    The configuration file being used is always logged to STDERR.
+- [#298](https://github.com/influxdata/kapacitor/issues/298): BREAKING: Change alert level evaluation so each level is independent and not required to be a subset of the previous level.
+    The breaking change is that expression evaluation order changed.
+    As a result stateful expressions that relied on that order are broken.
+- [#749](https://github.com/influxdata/kapacitor/issues/749): Fix issue with tasks with empty DAG.
+- [#718](https://github.com/influxdata/kapacitor/issues/718): Fix broken extra expressions for deadman's switch.
+- [#752](https://github.com/influxdata/kapacitor/issues/752): Fix various bugs relating to the `fill` operation on a JoinNode.
+    Fill with batches and fill when using the `on` property were broken.
+    Also changes the DefaultNode set defaults for nil fields.
 
 ## v1.0.0-beta3 [2016-07-09]
 
@@ -15,9 +163,9 @@
 ### Features
 
 - [#662](https://github.com/influxdata/kapacitor/pull/662): Add `-skipVerify` flag to `kapacitor` CLI tool to skip SSL verification.
-- [#680](https://github.com/influxdata/kapacitor/pull/680): Add Telegram Alerting option
-- [#46](https://github.com/influxdata/kapacitor/issue/46): Can now create combinations of points within the same stream.
-	This is kind of like join but instead joining a stream with itself.
+- [#680](https://github.com/influxdata/kapacitor/pull/680): Add Telegram Alerting option, thanks @burdandrei!
+- [#46](https://github.com/influxdata/kapacitor/issues/46): Can now create combinations of points within the same stream.
+  This is kind of like join but instead joining a stream with itself.
 - [#669](https://github.com/influxdata/kapacitor/pull/669): Add size function for humanize byte size. thanks @jsvisa!
 - [#697](https://github.com/influxdata/kapacitor/pull/697): Can now flatten a set of points into a single points creating dynamcially named fields.
 - [#698](https://github.com/influxdata/kapacitor/pull/698): Join delimiter can be specified.
@@ -28,11 +176,11 @@
 ### Bugfixes
 
 - [#656](https://github.com/influxdata/kapacitor/pull/656): Fix issues where an expression could not be passed as a function parameter in TICKscript.
-- [#627](https://github.com/influxdata/kapacitor/issue/627): Fix where InfluxQL functions that returned a batch could drop tags.
-- [#674](https://github.com/influxdata/kapacitor/issue/674): Fix panic with Join On and batches.
-- [#665](https://github.com/influxdata/kapacitor/issue/665): BREAKING: Fix file mode not being correct for Alert.Log files.
-	Breaking change is that integers numbers prefixed with a 0 in TICKscript are interpreted as octal numbers.
-- [#667](https://github.com/influxdata/kapacitor/issue/667): Align deadman timestamps to interval.
+- [#627](https://github.com/influxdata/kapacitor/issues/627): Fix where InfluxQL functions that returned a batch could drop tags.
+- [#674](https://github.com/influxdata/kapacitor/issues/674): Fix panic with Join On and batches.
+- [#665](https://github.com/influxdata/kapacitor/issues/665): BREAKING: Fix file mode not being correct for Alert.Log files.
+  Breaking change is that integers numbers prefixed with a 0 in TICKscript are interpreted as octal numbers.
+- [#667](https://github.com/influxdata/kapacitor/issues/667): Align deadman timestamps to interval.
 
 ## v1.0.0-beta2 [2016-06-17]
 
@@ -47,11 +195,11 @@
 
 - [#621](https://github.com/influxdata/kapacitor/pull/621): Fix obscure error about single vs double quotes.
 - [#623](https://github.com/influxdata/kapacitor/pull/623): Fix issues with recording metadata missing data url.
-- [#631](https://github.com/influxdata/kapacitor/issue/631): Fix issues with using iterative lambda expressions in an EvalNode.
-- [#628](https://github.com/influxdata/kapacitor/issue/628): BREAKING: Change `kapacitord config` to not search default location for configuration files but rather require the `-config` option.
+- [#631](https://github.com/influxdata/kapacitor/issues/631): Fix issues with using iterative lambda expressions in an EvalNode.
+- [#628](https://github.com/influxdata/kapacitor/issues/628): BREAKING: Change `kapacitord config` to not search default location for configuration files but rather require the `-config` option.
     Since the `kapacitord run` command behaves this way they should be consistent.
     Fix issue with `kapacitord config > kapacitor.conf` when the output file was a default location for the config.
-- [#626](https://github.com/influxdata/kapacitor/issue/626): Fix issues when changing the ID of an enabled task.
+- [#626](https://github.com/influxdata/kapacitor/issues/626): Fix issues when changing the ID of an enabled task.
 - [#624](https://github.com/influxdata/kapacitor/pull/624): Fix issues where you could get a read error on a closed UDF socket.
 - [#651](https://github.com/influxdata/kapacitor/pull/651): Fix issues where an error during a batch replay would hang because the task wouldn't stop.
 - [#650](https://github.com/influxdata/kapacitor/pull/650): BREAKING: The default retention policy name was changed to `autogen` in InfluxDB.
@@ -391,7 +539,7 @@ For example, let's say we want to store all data that triggered an alert in Infl
 - [#423](https://github.com/influxdata/kapacitor/issues/423): Recording stream queries with group by now correctly saves data in time order not group by order.
 - [#331](https://github.com/influxdata/kapacitor/issues/331): Fix panic when missing `.as()` for JoinNode.
 - [#523](https://github.com/influxdata/kapacitor/pull/523): JoinNode will now emit join sets as soon as they are ready. If multiple joinable sets arrive in the same tolerance window than each will be emitted (previously the first points were dropped).
-- [#537](https://github.com/influxdata/kapacitor/issue/537): Fix panic in alert node when batch is empty.
+- [#537](https://github.com/influxdata/kapacitor/issues/537): Fix panic in alert node when batch is empty.
 
 ## v0.12.0 [2016-04-04]
 

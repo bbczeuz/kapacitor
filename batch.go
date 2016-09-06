@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gorhill/cronexpr"
-	client "github.com/influxdata/influxdb/client/v2"
 	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/kapacitor/expvar"
+	"github.com/influxdata/kapacitor/influxdb"
 	"github.com/influxdata/kapacitor/models"
 	"github.com/influxdata/kapacitor/pipeline"
 )
@@ -95,8 +95,9 @@ func (s *BatchNode) Abort() {
 }
 
 type BatchQueries struct {
-	Queries []string
-	Cluster string
+	Queries            []string
+	Cluster            string
+	GroupByMeasurement bool
 }
 
 func (s *BatchNode) Queries(start, stop time.Time) []BatchQueries {
@@ -104,8 +105,9 @@ func (s *BatchNode) Queries(start, stop time.Time) []BatchQueries {
 	for i, b := range s.children {
 		qn := b.(*QueryNode)
 		queries[i] = BatchQueries{
-			Queries: qn.Queries(start, stop),
-			Cluster: qn.Cluster(),
+			Queries:            qn.Queries(start, stop),
+			Cluster:            qn.Cluster(),
+			GroupByMeasurement: qn.GroupByMeasurement(),
 		}
 	}
 	return queries
@@ -136,6 +138,7 @@ type QueryNode struct {
 	connectErrors  *expvar.Int
 	batchesQueried *expvar.Int
 	pointsQueried  *expvar.Int
+	byName         bool
 }
 
 func newQueryNode(et *ExecutingTask, n *pipeline.QueryNode, l *log.Logger) (*QueryNode, error) {
@@ -144,6 +147,7 @@ func newQueryNode(et *ExecutingTask, n *pipeline.QueryNode, l *log.Logger) (*Que
 		b:        n,
 		closing:  make(chan struct{}),
 		aborting: make(chan struct{}),
+		byName:   n.GroupByMeasurementFlag,
 	}
 	bn.node.runF = bn.runBatch
 	bn.node.stopF = bn.stopBatch
@@ -194,6 +198,10 @@ func newQueryNode(et *ExecutingTask, n *pipeline.QueryNode, l *log.Logger) (*Que
 	}
 
 	return bn, nil
+}
+
+func (b *QueryNode) GroupByMeasurement() bool {
+	return b.byName
 }
 
 // Return list of databases and retention policies
@@ -261,7 +269,7 @@ func (b *QueryNode) doQuery() error {
 		return errors.New("InfluxDB not configured, cannot query InfluxDB for batch query")
 	}
 
-	var con client.Client
+	var con influxdb.Client
 	tickC := b.ticker.Start()
 	for {
 		select {
@@ -295,7 +303,7 @@ func (b *QueryNode) doQuery() error {
 					break
 				}
 			}
-			q := client.Query{
+			q := influxdb.Query{
 				Command: b.query.String(),
 			}
 
@@ -319,7 +327,7 @@ func (b *QueryNode) doQuery() error {
 
 			// Collect batches
 			for _, res := range resp.Results {
-				batches, err := models.ResultToBatches(res)
+				batches, err := models.ResultToBatches(res, b.byName)
 				if err != nil {
 					b.logger.Println("E! failed to understand query result:", err)
 					b.queryErrors.Add(1)

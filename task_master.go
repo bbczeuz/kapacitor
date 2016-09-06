@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	client "github.com/influxdata/influxdb/client/v2"
 	imodels "github.com/influxdata/influxdb/models"
 	"github.com/influxdata/kapacitor/expvar"
+	"github.com/influxdata/kapacitor/influxdb"
 	"github.com/influxdata/kapacitor/models"
 	"github.com/influxdata/kapacitor/pipeline"
 	"github.com/influxdata/kapacitor/services/httpd"
@@ -57,8 +57,8 @@ type TaskMaster struct {
 	UDFService UDFService
 
 	InfluxDBService interface {
-		NewDefaultClient() (client.Client, error)
-		NewNamedClient(name string) (client.Client, error)
+		NewDefaultClient() (influxdb.Client, error)
+		NewNamedClient(name string) (influxdb.Client, error)
 	}
 	SMTPService interface {
 		Global() bool
@@ -297,6 +297,11 @@ func (tm *TaskMaster) NewTask(
 	if err != nil {
 		return nil, err
 	}
+	// A task will always have a stream or batch node.
+	// If it doesn't have anything more then the task does nothing with the data.
+	if p.Len() <= 1 {
+		return nil, fmt.Errorf("task does nothing")
+	}
 	t.Pipeline = p
 	return t, nil
 }
@@ -478,7 +483,12 @@ func (tm *TaskMaster) runForking(in *Edge) {
 
 func (tm *TaskMaster) forkPoint(p models.Point) {
 	tm.mu.RLock()
-	defer tm.mu.RUnlock()
+	locked := true
+	defer func() {
+		if locked {
+			tm.mu.RUnlock()
+		}
+	}()
 
 	// Create the fork keys - which is (db, rp, measurement)
 	key := forkKey{
@@ -506,9 +516,20 @@ func (tm *TaskMaster) forkPoint(p models.Point) {
 
 	c, ok := tm.forkStats[key]
 	if !ok {
-		// Create statistics
-		c = &expvar.Int{}
-		tm.forkStats[key] = c
+		// Release read lock
+		tm.mu.RUnlock()
+		locked = false
+
+		// Get write lock
+		tm.mu.Lock()
+		// Now with write lock check again
+		c, ok = tm.forkStats[key]
+		if !ok {
+			// Create statistics
+			c = &expvar.Int{}
+			tm.forkStats[key] = c
+		}
+		tm.mu.Unlock()
 
 		tags := map[string]string{
 			"task_master":      tm.id,

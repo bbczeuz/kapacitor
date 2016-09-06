@@ -1,11 +1,12 @@
 github.com/boltdb/bolt
 github.com/BurntSushi/toml
 github.com/cenkalti/backoff
+github.com/dgrijalva/jwt-go v3.0.0
 github.com/dustin/go-humanize
 github.com/gogo/protobuf
 github.com/golang/protobuf
 github.com/gorhill/cronexpr
-github.com/influxdata/influxdb
+github.com/influxdata/influxdb 1.0
 github.com/influxdata/usage-client
 github.com/kimor79/gollectd
 github.com/mattn/go-runewidth

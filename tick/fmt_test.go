@@ -36,6 +36,14 @@ func TestFormat(t *testing.T) {
 			exp:    "var x = 60s\n",
 		},
 		{
+			script: `var x= /.*/`,
+			exp:    "var x = /.*/\n",
+		},
+		{
+			script: `var x= /^\/root\//`,
+			exp:    "var x = /^\\/root\\//\n",
+		},
+		{
 			script: `var x=stream()|window().period(10s).every(10s)`,
 			exp: `var x = stream()
     |window()
@@ -128,6 +136,53 @@ AND
     (TRUE OR FALSE),
     'arg'
 )
+`,
+		},
+		{
+			script: `// Preserve comments spacing
+
+// Comment block 1
+// still 1
+
+// Comment block 2
+// still 2
+
+// Preserve per line spacing
+//     indented
+//fix this line
+//
+
+
+var x = stream
+	|from()
+		//.measurement('mem')
+		.measurement('cpu')
+
+// This should be its own comment block
+x |alert()
+	
+
+`,
+			exp: `// Preserve comments spacing
+
+// Comment block 1
+// still 1
+
+// Comment block 2
+// still 2
+
+// Preserve per line spacing
+//     indented
+// fix this line
+//
+var x = stream
+    |from()
+        // .measurement('mem')
+        .measurement('cpu')
+
+// This should be its own comment block
+x
+    |alert()
 `,
 		},
 		{

@@ -79,16 +79,35 @@ const defaultLogFileMode = 0600
 //           .crit(lambda: "value" > 30)
 //           .post("http://example.com/api/alert")
 //           .post("http://another.example.com/api/alert")
-//           .email().to('oncall@example.com')
+//           .email('oncall@example.com')
 //
 //
-// It is assumed that each successive level filters a subset
-// of the previous level. As a result, the filter will only be applied if
-// a data point passed the previous level.
-// In the above example, if value = 15 then the INFO and
-// WARNING expressions would be evaluated, but not the
-// CRITICAL expression.
 // Each expression maintains its own state.
+// The order of execution for the expressions is not considered to be deterministic.
+// For each point an expression may or may not be evaluated.
+// If no expression is true then the alert is considered to be in the OK state.
+//
+// Kapacitor supports alert reset expressions.
+// This way when an alert enters a state, it can only be lowered in severity if its reset expression evaluates to true.
+//
+// Example:
+//   stream
+//       |from()
+//           .measurement('cpu')
+//           .where(lambda: "host" == 'serverA')
+//           .groupBy('host')
+//       |alert()
+//           .info(lambda: "value" > 60)
+//           .infoReset(lambda: "value" < 50)
+//           .warn(lambda: "value" > 70)
+//           .warnReset(lambda: "value" < 60)
+//           .crit(lambda: "value" > 80)
+//           .critReset(lambda: "value" < 70)
+//
+// For example given the following values:
+//     61 73 64 85 62 56 47
+// The corresponding alert states are:
+//     INFO WARNING WARNING CRITICAL INFO INFO OK
 //
 // Available Statistics:
 //
@@ -209,6 +228,13 @@ type AlertNode struct {
 	// An empty value indicates the level is invalid and is skipped.
 	Crit *ast.LambdaNode
 
+	// Filter expression for reseting the INFO alert level to lower level.
+	InfoReset *ast.LambdaNode
+	// Filter expression for reseting the WARNING alert level to lower level.
+	WarnReset *ast.LambdaNode
+	// Filter expression for reseting the CRITICAL alert level to lower level.
+	CritReset *ast.LambdaNode
+
 	//tick:ignore
 	UseFlapping bool `tick:"Flapping"`
 	//tick:ignore
@@ -240,6 +266,10 @@ type AlertNode struct {
 	// Indicates an alert should trigger only if all points in a batch match the criteria
 	// tick:ignore
 	AllFlag bool `tick:"All"`
+
+	// Do not send recovery events.
+	// tick:ignore
+	NoRecoveriesFlag bool `tick:"NoRecoveries"`
 
 	// Send alerts only on state changes.
 	// tick:ignore
@@ -329,11 +359,18 @@ func (n *AlertNode) ChainMethods() map[string]reflect.Value {
 	}
 }
 
-// Indicates an alert should trigger only if all points in a batch match the criteria
+// Indicates an alert should trigger only if all points in a batch match the criteria.
 // Does not apply to stream alerts.
 // tick:property
 func (n *AlertNode) All() *AlertNode {
 	n.AllFlag = true
+	return n
+}
+
+// Do not send recovery alerts.
+// tick:property
+func (n *AlertNode) NoRecoveries() *AlertNode {
+	n.NoRecoveriesFlag = true
 	return n
 }
 
@@ -418,7 +455,7 @@ func (a *AlertNode) Post(url string) *PostHandler {
 	return post
 }
 
-// tick:embedded:AlertNode.Email
+// tick:embedded:AlertNode.Post
 type PostHandler struct {
 	*AlertNode
 
@@ -495,6 +532,25 @@ type EmailHandler struct {
 // Define the To addresses for the email alert.
 // Multiple calls append to the existing list of addresses.
 // If empty uses the addresses from the configuration.
+//
+// Example:
+//    |alert()
+//       .id('{{ .Name }}')
+//       // Email subject
+//       .meassage('{{ .ID }}:{{ .Level }}')
+//       //Email body as HTML
+//       .details('''
+//<h1>{{ .ID }}</h1>
+//<b>{{ .Message }}</b>
+//Value: {{ index .Fields "value" }}
+//''')
+//       .email('admin@example.com')
+//         .to('oncall@example.com')
+//         .to('support@example.com')
+//
+// All three email addresses will receive the alert message.
+//
+// Passing addresses to the `email` property directly or using the `email.to` property is the same.
 // tick:property
 func (h *EmailHandler) To(to ...string) *EmailHandler {
 	h.ToList = append(h.ToList, to...)
@@ -852,6 +908,7 @@ type AlertaHandler struct {
 
 // List of effected services.
 // If not specified defaults to the Name of the stream.
+// tick:property
 func (a *AlertaHandler) Services(service ...string) *AlertaHandler {
 	a.Service = service
 	return a

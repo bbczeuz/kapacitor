@@ -116,6 +116,9 @@ type AlertNode struct {
 	critsTriggered  *expvar.Int
 
 	bufPool sync.Pool
+
+	levelResets  []stateful.Expression
+	lrScopePools []stateful.ScopePool
 }
 
 // Create a new  AlertNode which caches the most recent item and exposes it over the HTTP API.
@@ -310,6 +313,9 @@ func newAlertNode(et *ExecutingTask, n *pipeline.AlertNode, l *log.Logger) (an *
 	an.levels = make([]stateful.Expression, CritAlert+1)
 	an.scopePools = make([]stateful.ScopePool, CritAlert+1)
 
+	an.levelResets = make([]stateful.Expression, CritAlert+1)
+	an.lrScopePools = make([]stateful.ScopePool, CritAlert+1)
+
 	if n.Info != nil {
 		statefulExpression, expressionCompileError := stateful.NewExpression(n.Info.Expression)
 		if expressionCompileError != nil {
@@ -318,6 +324,14 @@ func newAlertNode(et *ExecutingTask, n *pipeline.AlertNode, l *log.Logger) (an *
 
 		an.levels[InfoAlert] = statefulExpression
 		an.scopePools[InfoAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.Info.Expression))
+		if n.InfoReset != nil {
+			lstatefulExpression, lexpressionCompileError := stateful.NewExpression(n.InfoReset.Expression)
+			if lexpressionCompileError != nil {
+				return nil, fmt.Errorf("Failed to compile stateful expression for infoReset: %s", lexpressionCompileError)
+			}
+			an.levelResets[InfoAlert] = lstatefulExpression
+			an.lrScopePools[InfoAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.InfoReset.Expression))
+		}
 	}
 
 	if n.Warn != nil {
@@ -327,6 +341,14 @@ func newAlertNode(et *ExecutingTask, n *pipeline.AlertNode, l *log.Logger) (an *
 		}
 		an.levels[WarnAlert] = statefulExpression
 		an.scopePools[WarnAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.Warn.Expression))
+		if n.WarnReset != nil {
+			lstatefulExpression, lexpressionCompileError := stateful.NewExpression(n.WarnReset.Expression)
+			if lexpressionCompileError != nil {
+				return nil, fmt.Errorf("Failed to compile stateful expression for warnReset: %s", lexpressionCompileError)
+			}
+			an.levelResets[WarnAlert] = lstatefulExpression
+			an.lrScopePools[WarnAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.WarnReset.Expression))
+		}
 	}
 
 	if n.Crit != nil {
@@ -336,6 +358,14 @@ func newAlertNode(et *ExecutingTask, n *pipeline.AlertNode, l *log.Logger) (an *
 		}
 		an.levels[CritAlert] = statefulExpression
 		an.scopePools[CritAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.Crit.Expression))
+		if n.CritReset != nil {
+			lstatefulExpression, lexpressionCompileError := stateful.NewExpression(n.CritReset.Expression)
+			if lexpressionCompileError != nil {
+				return nil, fmt.Errorf("Failed to compile stateful expression for critReset: %s", lexpressionCompileError)
+			}
+			an.levelResets[CritAlert] = lstatefulExpression
+			an.lrScopePools[CritAlert] = stateful.NewScopePool(stateful.FindReferenceVariables(n.CritReset.Expression))
+		}
 	}
 
 	// Setup states
@@ -374,7 +404,11 @@ func (a *AlertNode) runAlert([]byte) error {
 	case pipeline.StreamEdge:
 		for p, ok := a.ins[0].NextPoint(); ok; p, ok = a.ins[0].NextPoint() {
 			a.timer.Start()
-			l := a.determineLevel(p.Time, p.Fields, p.Tags)
+			var currentLevel AlertLevel
+			if state, ok := a.states[p.Group]; ok {
+				currentLevel = state.currentLevel()
+			}
+			l := a.determineLevel(p.Time, p.Fields, p.Tags, currentLevel)
 			state := a.updateState(p.Time, l, p.Group)
 			if (a.a.UseFlapping && state.flapping) || (a.a.IsStateChangesOnly && !state.changed && !state.expired) {
 				a.timer.Stop()
@@ -385,10 +419,16 @@ func (a *AlertNode) runAlert([]byte) error {
 				batch := models.Batch{
 					Name:   p.Name,
 					Group:  p.Group,
+					ByName: p.Dimensions.ByName,
 					Tags:   p.Tags,
 					Points: []models.BatchPoint{models.BatchPointFromPoint(p)},
 				}
 				state.triggered(p.Time)
+				// Suppress the recovery event.
+				if a.a.NoRecoveriesFlag && l == OKAlert {
+					a.timer.Stop()
+					continue
+				}
 				duration := state.duration()
 				ad, err := a.alertData(p.Name, p.Group, p.Tags, p.Fields, l, p.Time, duration, batch)
 				if err != nil {
@@ -441,7 +481,11 @@ func (a *AlertNode) runAlert([]byte) error {
 			var highestPoint *models.BatchPoint
 
 			for i, p := range b.Points {
-				l := a.determineLevel(p.Time, p.Fields, p.Tags)
+				var currentLevel AlertLevel
+				if state, ok := a.states[b.Group]; ok {
+					currentLevel = state.currentLevel()
+				}
+				l := a.determineLevel(p.Time, p.Fields, p.Tags, currentLevel)
 				if l < lowestLevel {
 					lowestLevel = l
 				}
@@ -474,6 +518,12 @@ func (a *AlertNode) runAlert([]byte) error {
 					!((a.a.UseFlapping && state.flapping) ||
 						(a.a.IsStateChangesOnly && !state.changed && !state.expired))) {
 				state.triggered(t)
+				// Suppress the recovery event.
+				if a.a.NoRecoveriesFlag && l == OKAlert {
+					a.timer.Stop()
+					continue
+				}
+
 				duration := state.duration()
 				ad, err := a.alertData(b.Name, b.Group, b.Tags, highestPoint.Fields, l, t, duration, b)
 				if err != nil {
@@ -533,6 +583,7 @@ func (a *AlertNode) runAlert([]byte) error {
 	}
 	return nil
 }
+
 func (a *AlertNode) handleAlert(ad *AlertData) {
 	a.alertsTriggered.Add(1)
 	switch ad.Level {
@@ -551,21 +602,40 @@ func (a *AlertNode) handleAlert(ad *AlertData) {
 	}
 }
 
-func (a *AlertNode) determineLevel(now time.Time, fields models.Fields, tags map[string]string) (level AlertLevel) {
-	for l, se := range a.levels {
+func (a *AlertNode) determineLevel(now time.Time, fields models.Fields, tags map[string]string, currentLevel AlertLevel) AlertLevel {
+	if higherLevel, found := a.findFirstMatchLevel(CritAlert, currentLevel-1, now, fields, tags); found {
+		return higherLevel
+	}
+	if rse := a.levelResets[currentLevel]; rse != nil {
+		if pass, err := EvalPredicate(rse, a.lrScopePools[currentLevel], now, fields, tags); err != nil {
+			a.logger.Printf("E! error evaluating reset expression for current level %v: %s", currentLevel, err)
+		} else if !pass {
+			return currentLevel
+		}
+	}
+	if newLevel, found := a.findFirstMatchLevel(currentLevel, OKAlert, now, fields, tags); found {
+		return newLevel
+	}
+	return OKAlert
+}
+
+func (a *AlertNode) findFirstMatchLevel(start AlertLevel, stop AlertLevel, now time.Time, fields models.Fields, tags map[string]string) (AlertLevel, bool) {
+	if stop < OKAlert {
+		stop = OKAlert
+	}
+	for l := start; l > stop; l-- {
+		se := a.levels[l]
 		if se == nil {
 			continue
 		}
-		if pass, err := EvalPredicate(se, a.scopePools[l], now, fields, tags); pass {
-			level = AlertLevel(l)
-		} else if err != nil {
-			a.logger.Println("E! error evaluating expression:", err)
-			return
-		} else {
-			return
+		if pass, err := EvalPredicate(se, a.scopePools[l], now, fields, tags); err != nil {
+			a.logger.Printf("E! error evaluating expression for level %v: %s", AlertLevel(l), err)
+			continue
+		} else if pass {
+			return AlertLevel(l), true
 		}
 	}
-	return
+	return OKAlert, false
 }
 
 func (a *AlertNode) batchToResult(b models.Batch) influxql.Result {
@@ -644,6 +714,11 @@ func (a *alertState) addEvent(level AlertLevel) {
 	a.changed = a.history[a.idx] != level
 	a.idx = (a.idx + 1) % len(a.history)
 	a.history[a.idx] = level
+}
+
+// Return current level of this state
+func (a *alertState) currentLevel() AlertLevel {
+	return a.history[a.idx]
 }
 
 // Compute the percentage change in the alert history.

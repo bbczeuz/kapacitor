@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
-	client "github.com/influxdata/influxdb/client/v2"
 	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/kapacitor"
 	kclient "github.com/influxdata/kapacitor/client/v1"
 	"github.com/influxdata/kapacitor/clock"
+	"github.com/influxdata/kapacitor/influxdb"
 	"github.com/influxdata/kapacitor/models"
 	"github.com/influxdata/kapacitor/services/httpd"
 	"github.com/influxdata/kapacitor/services/storage"
@@ -70,8 +70,8 @@ type Service struct {
 		DelRoutes([]httpd.Route)
 	}
 	InfluxDBService interface {
-		NewDefaultClient() (client.Client, error)
-		NewNamedClient(name string) (client.Client, error)
+		NewDefaultClient() (influxdb.Client, error)
+		NewNamedClient(name string) (influxdb.Client, error)
 	}
 	TaskMasterLookup interface {
 		Get(string) *kapacitor.TaskMaster
@@ -1331,11 +1331,11 @@ func (s *Service) startRecordBatch(t *kapacitor.Task, start, stop time.Time) ([]
 	for batchIndex, batchQueries := range batches {
 		source := make(chan models.Batch)
 		sources[batchIndex] = source
-		go func(cluster string, queries []string) {
+		go func(cluster string, queries []string, groupByName bool) {
 			defer close(source)
 
 			// Connect to the cluster
-			var con client.Client
+			var con influxdb.Client
 			var err error
 			if cluster != "" {
 				con, err = s.InfluxDBService.NewNamedClient(cluster)
@@ -1348,7 +1348,7 @@ func (s *Service) startRecordBatch(t *kapacitor.Task, start, stop time.Time) ([]
 			}
 			// Run queries
 			for _, q := range queries {
-				query := client.Query{
+				query := influxdb.Query{
 					Command: q,
 				}
 				resp, err := con.Query(query)
@@ -1361,7 +1361,7 @@ func (s *Service) startRecordBatch(t *kapacitor.Task, start, stop time.Time) ([]
 					return
 				}
 				for _, res := range resp.Results {
-					batches, err := models.ResultToBatches(res)
+					batches, err := models.ResultToBatches(res, groupByName)
 					if err != nil {
 						errors <- err
 						return
@@ -1372,7 +1372,7 @@ func (s *Service) startRecordBatch(t *kapacitor.Task, start, stop time.Time) ([]
 				}
 			}
 			errors <- nil
-		}(batchQueries.Cluster, batchQueries.Queries)
+		}(batchQueries.Cluster, batchQueries.Queries, batchQueries.GroupByMeasurement)
 	}
 	errC := make(chan error, 1)
 	go func() {
@@ -1443,7 +1443,7 @@ func (r *Service) runQueryStream(source chan<- models.Point, q, cluster string) 
 	}
 	// Write results to sources
 	for _, res := range resp.Results {
-		batches, err := models.ResultToBatches(res)
+		batches, err := models.ResultToBatches(res, false)
 		if err != nil {
 			return err
 		}
@@ -1506,7 +1506,7 @@ func (r *Service) runQueryBatch(source chan<- models.Batch, q string, cluster st
 	}
 	// Write results to sources
 	for _, res := range resp.Results {
-		batches, err := models.ResultToBatches(res)
+		batches, err := models.ResultToBatches(res, false)
 		if err != nil {
 			return err
 		}
@@ -1552,7 +1552,7 @@ func (s *Service) saveStreamQuery(dataSource DataSource, points <-chan models.Po
 	return sw.Close()
 }
 
-func (s *Service) execQuery(q, cluster string) (kapacitor.DBRP, *client.Response, error) {
+func (s *Service) execQuery(q, cluster string) (kapacitor.DBRP, *influxdb.Response, error) {
 	// Parse query to determine dbrp
 	dbrp := kapacitor.DBRP{}
 	stmt, err := influxql.ParseStatement(q)
@@ -1572,7 +1572,7 @@ func (s *Service) execQuery(q, cluster string) (kapacitor.DBRP, *client.Response
 		return dbrp, nil, errors.New("InfluxDB not configured, cannot record query")
 	}
 	// Query InfluxDB
-	var con client.Client
+	var con influxdb.Client
 	if cluster != "" {
 		con, err = s.InfluxDBService.NewNamedClient(cluster)
 	} else {
@@ -1581,7 +1581,7 @@ func (s *Service) execQuery(q, cluster string) (kapacitor.DBRP, *client.Response
 	if err != nil {
 		return dbrp, nil, err
 	}
-	query := client.Query{
+	query := influxdb.Query{
 		Command: q,
 	}
 	resp, err := con.Query(query)

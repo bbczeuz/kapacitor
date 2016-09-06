@@ -261,6 +261,18 @@ batch
 				Columns: []string{"time", "elapsed"},
 				Values: [][]interface{}{
 					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						2000.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 4, 0, time.UTC),
+						2000.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 6, 0, time.UTC),
+						2000.0,
+					},
+					{
 						time.Date(1971, 1, 1, 0, 0, 8, 0, time.UTC),
 						2000.0,
 					},
@@ -270,6 +282,97 @@ batch
 	}
 
 	testBatcherWithOutput(t, "TestBatch_Elapsed", script, 21*time.Second, er, false)
+}
+
+func TestBatch_Difference(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT "value"
+		FROM "telegraf"."default".packets
+''')
+		.period(10s)
+		.every(10s)
+	|difference('value')
+	|log()
+	|httpOut('TestBatch_Difference')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "packets",
+				Tags:    nil,
+				Columns: []string{"time", "difference"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						5.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 4, 0, time.UTC),
+						3.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 6, 0, time.UTC),
+						1.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 8, 0, time.UTC),
+						-5.0,
+					},
+				},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_Difference", script, 21*time.Second, er, false)
+}
+
+func TestBatch_MovingAverage(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT "value"
+		FROM "telegraf"."default".packets
+''')
+		.period(10s)
+		.every(10s)
+	|movingAverage('value', 2)
+	|httpOut('TestBatch_MovingAverage')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "packets",
+				Tags:    nil,
+				Columns: []string{"time", "movingAverage"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						1002.5,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 4, 0, time.UTC),
+						1006.5,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 6, 0, time.UTC),
+						1008.5,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 8, 0, time.UTC),
+						1006.5,
+					},
+				},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_MovingAverage", script, 21*time.Second, er, false)
 }
 
 func TestBatch_SimpleMR(t *testing.T) {
@@ -326,6 +429,102 @@ batch
 
 	testBatcherWithOutput(t, "TestBatch_SimpleMR", script, 30*time.Second, er, false)
 }
+
+func TestBatch_Where_NoSideEffect(t *testing.T) {
+
+	var script = `
+var data = batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "host" = 'serverA'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s), 'cpu')
+	|where(lambda: "mean" > 85)
+
+// Unused where clause should not side-effect
+data
+	|where(lambda: FALSE)
+
+data
+	|httpOut('TestBatch_SimpleMR')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu-total"},
+				Columns: []string{"time", "mean"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 20, 0, time.UTC),
+						91.06416290101595,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 22, 0, time.UTC),
+						85.9694442394385,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 24, 0, time.UTC),
+						90.62985736134186,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 26, 0, time.UTC),
+						86.45443196005628,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+						88.97243107764031,
+					},
+				},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu0"},
+				Columns: []string{"time", "mean"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 20, 0, time.UTC),
+						85.08910891088406,
+					},
+				},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu1"},
+				Columns: []string{"time", "mean"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 20, 0, time.UTC),
+						96.49999999996908,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 22, 0, time.UTC),
+						93.46464646468584,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 24, 0, time.UTC),
+						95.00950095007724,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 26, 0, time.UTC),
+						92.99999999998636,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+						90.99999999998545,
+					},
+				},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_SimpleMR", script, 30*time.Second, er, false)
+}
+
 func TestBatch_CountEmptyBatch(t *testing.T) {
 	var script = `
 batch
@@ -337,9 +536,7 @@ batch
 		.period(10s)
 		.every(10s)
 		.groupBy('cpu')
-	|log().prefix('QUERY')
 	|where(lambda: "mean" < 10)
-	|log().prefix('WHERE')
 	|count('mean')
 	|httpOut('TestBatch_CountEmptyBatch')
 `
@@ -391,9 +588,7 @@ batch
 		.period(10s)
 		.every(10s)
 		.groupBy('cpu')
-	|log().prefix('QUERY')
 	|where(lambda: "mean" < 10)
-	|log().prefix('WHERE')
 	|sum('mean')
 	|httpOut('TestBatch_CountEmptyBatch')
 `
@@ -525,6 +720,83 @@ batch
 	testBatcherWithOutput(t, "TestBatch_Default", script, 30*time.Second, er, false)
 }
 
+func TestBatch_Delete(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu-total'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s))
+	|delete()
+		.field('mean')
+		.tag('dc')
+	|default()
+		.field('mean', 10.0)
+		.tag('dc', 'sfc')
+	|groupBy('dc')
+	|sum('mean')
+	|httpOut('TestBatch_Delete')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"dc": "sfc"},
+				Columns: []string{"time", "sum"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 8, 0, time.UTC),
+					50.0,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_Delete", script, 30*time.Second, er, false)
+}
+func TestBatch_Delete_GroupBy(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu-total'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s), 'dc')
+	|delete()
+		.field('mean')
+		.tag('dc')
+	|default()
+		.field('mean', 10.0)
+	|sum('mean')
+	|httpOut('TestBatch_Delete_GroupBy')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    nil,
+				Columns: []string{"time", "sum"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					50.0,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_Delete_GroupBy", script, 30*time.Second, er, false)
+}
+
 func TestBatch_DoubleGroupBy(t *testing.T) {
 
 	var script = `
@@ -557,6 +829,164 @@ batch
 	}
 
 	testBatcherWithOutput(t, "TestBatch_SimpleMR", script, 30*time.Second, er, false)
+}
+
+func TestBatch_GroupByMeasurement(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default"./cpu_.*/
+		WHERE "host" = 'serverA'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s), 'cpu')
+		.groupByMeasurement()
+	|max('mean')
+	|httpOut('TestBatch_GroupByMeasurement')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu-total"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					8.97243107764031,
+				}},
+			},
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu0"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					8.00000000002001,
+				}},
+			},
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu1"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					6.49999999996908,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu-total"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					91.06416290101595,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu0"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					85.08910891088406,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu1"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					96.49999999996908,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_GroupByMeasurement", script, 30*time.Second, er, true)
+}
+func TestBatch_GroupByNodeByMeasurement(t *testing.T) {
+
+	var script = `
+batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default"./cpu_.*/
+		WHERE "host" = 'serverA'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s), 'cpu')
+	|groupBy('cpu')
+		.byMeasurement()
+	|max('mean')
+	|httpOut('TestBatch_GroupByMeasurement')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu-total"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					9.90919811320221,
+				}},
+			},
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu0"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					5.93434343435388,
+				}},
+			},
+			{
+				Name:    "cpu_usage_user",
+				Tags:    map[string]string{"cpu": "cpu1"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					6.54015887023496,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu-total"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					91.01699558842134,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu0"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					85.93434343435388,
+				}},
+			},
+			{
+				Name:    "cpu_usage_idle",
+				Tags:    map[string]string{"cpu": "cpu1"},
+				Columns: []string{"time", "max"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 18, 0, time.UTC),
+					95.98484848485191,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_GroupByMeasurement", script, 30*time.Second, er, true)
 }
 
 func TestBatch_AlertAll(t *testing.T) {
@@ -665,31 +1095,31 @@ batch
 				Values: [][]interface{}{
 					{
 						time.Date(1971, 1, 1, 0, 0, 20, 0, time.UTC),
-						"cpu_usage_idle:cpu=cpu1,",
+						"cpu_usage_idle:cpu=cpu1",
 						"CRITICAL",
 						96.49999999996908,
 					},
 					{
 						time.Date(1971, 1, 1, 0, 0, 22, 0, time.UTC),
-						"cpu_usage_idle:cpu=cpu1,",
+						"cpu_usage_idle:cpu=cpu1",
 						"CRITICAL",
 						93.46464646468584,
 					},
 					{
 						time.Date(1971, 1, 1, 0, 0, 24, 0, time.UTC),
-						"cpu_usage_idle:cpu=cpu1,",
+						"cpu_usage_idle:cpu=cpu1",
 						"CRITICAL",
 						95.00950095007724,
 					},
 					{
 						time.Date(1971, 1, 1, 0, 0, 26, 0, time.UTC),
-						"cpu_usage_idle:cpu=cpu1,",
+						"cpu_usage_idle:cpu=cpu1",
 						"CRITICAL",
 						92.99999999998636,
 					},
 					{
 						time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
-						"cpu_usage_idle:cpu=cpu1,",
+						"cpu_usage_idle:cpu=cpu1",
 						"CRITICAL",
 						90.99999999998545,
 					},
@@ -724,7 +1154,7 @@ batch
 		Series: imodels.Rows{
 			{
 				Name:    "cpu_usage_idle",
-				Tags:    map[string]string{"cpu": "cpu1", "level": "CRITICAL", "id": "cpu_usage_idle:cpu=cpu1,"},
+				Tags:    map[string]string{"cpu": "cpu1", "level": "CRITICAL", "id": "cpu_usage_idle:cpu=cpu1"},
 				Columns: []string{"time", "mean"},
 				Values: [][]interface{}{
 					{
@@ -825,8 +1255,8 @@ func TestBatch_AlertStateChangesOnly(t *testing.T) {
 		atomic.AddInt32(&requestCount, 1)
 		if rc := atomic.LoadInt32(&requestCount); rc == 1 {
 			expAd := kapacitor.AlertData{
-				ID:      "cpu_usage_idle:cpu=cpu-total,",
-				Message: "cpu_usage_idle:cpu=cpu-total, is CRITICAL",
+				ID:      "cpu_usage_idle:cpu=cpu-total",
+				Message: "cpu_usage_idle:cpu=cpu-total is CRITICAL",
 				Time:    time.Date(1971, 1, 1, 0, 0, 0, 0, time.UTC),
 				Level:   kapacitor.CritAlert,
 			}
@@ -836,8 +1266,8 @@ func TestBatch_AlertStateChangesOnly(t *testing.T) {
 			}
 		} else {
 			expAd := kapacitor.AlertData{
-				ID:       "cpu_usage_idle:cpu=cpu-total,",
-				Message:  "cpu_usage_idle:cpu=cpu-total, is OK",
+				ID:       "cpu_usage_idle:cpu=cpu-total",
+				Message:  "cpu_usage_idle:cpu=cpu-total is OK",
 				Time:     time.Date(1971, 1, 1, 0, 0, 38, 0, time.UTC),
 				Duration: 38 * time.Second,
 				Level:    kapacitor.OKAlert,
@@ -894,16 +1324,16 @@ func TestBatch_AlertStateChangesOnlyExpired(t *testing.T) {
 		rc := atomic.LoadInt32(&requestCount)
 		if rc < 3 {
 			expAd = kapacitor.AlertData{
-				ID:       "cpu_usage_idle:cpu=cpu-total,",
-				Message:  "cpu_usage_idle:cpu=cpu-total, is CRITICAL",
+				ID:       "cpu_usage_idle:cpu=cpu-total",
+				Message:  "cpu_usage_idle:cpu=cpu-total is CRITICAL",
 				Time:     time.Date(1971, 1, 1, 0, 0, int(rc-1)*20, 0, time.UTC),
 				Duration: time.Duration(rc-1) * 20 * time.Second,
 				Level:    kapacitor.CritAlert,
 			}
 		} else {
 			expAd = kapacitor.AlertData{
-				ID:       "cpu_usage_idle:cpu=cpu-total,",
-				Message:  "cpu_usage_idle:cpu=cpu-total, is OK",
+				ID:       "cpu_usage_idle:cpu=cpu-total",
+				Message:  "cpu_usage_idle:cpu=cpu-total is OK",
 				Time:     time.Date(1971, 1, 1, 0, 0, 38, 0, time.UTC),
 				Duration: 38 * time.Second,
 				Level:    kapacitor.OKAlert,
@@ -1390,6 +1820,111 @@ cpu0
 	testBatcherWithOutput(t, "TestBatch_JoinTolerance", script, 30*time.Second, er, false)
 }
 
+func TestBatch_Join_NoFill(t *testing.T) {
+
+	var script = `
+var cpu0 = batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu0'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s))
+
+var cpu1 = batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu1'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s))
+
+cpu0
+	|join(cpu1)
+		.as('cpu0', 'cpu1')
+	|eval(lambda: "cpu0.mean" + "cpu1.mean")
+		.as('cpu')
+	|sum('cpu')
+	|window()
+		.period(20s)
+		.every(20s)
+	|sum('sum')
+	|httpOut('TestBatch_Join_Fill')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_idle",
+				Columns: []string{"time", "sum"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					876.0,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_Join_Fill", script, 30*time.Second, er, false)
+}
+
+func TestBatch_Join_Fill_Num(t *testing.T) {
+
+	var script = `
+var cpu0 = batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu0'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s))
+
+var cpu1 = batch
+	|query('''
+		SELECT mean("value")
+		FROM "telegraf"."default".cpu_usage_idle
+		WHERE "cpu" = 'cpu1'
+''')
+		.period(10s)
+		.every(10s)
+		.groupBy(time(2s))
+
+cpu0
+	|join(cpu1)
+		.as('cpu0', 'cpu1')
+		.fill(100.0)
+	|eval(lambda: "cpu0.mean" + "cpu1.mean")
+		.as('cpu')
+	|sum('cpu')
+	|window()
+		.period(20s)
+		.every(20s)
+	|sum('sum')
+	|httpOut('TestBatch_Join_Fill')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "cpu_usage_idle",
+				Columns: []string{"time", "sum"},
+				Values: [][]interface{}{[]interface{}{
+					time.Date(1971, 1, 1, 0, 0, 28, 0, time.UTC),
+					1178.0,
+				}},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_Join_Fill", script, 30*time.Second, er, false)
+}
+
 func TestBatch_JoinOn(t *testing.T) {
 
 	var script = `
@@ -1504,6 +2039,182 @@ errorsByServiceGlobal
 	}
 
 	testBatcherWithOutput(t, "TestBatch_JoinOn", script, 30*time.Second, er, true)
+}
+
+func TestBatch_JoinOn_Fill_Num(t *testing.T) {
+
+	var script = `
+var maintlock = batch
+    |query('SELECT count FROM "db"."rp"."maintlock"')
+        .period(10s)
+        .every(10s)
+        .groupBy('host')
+        .align()
+
+batch
+    |query('SELECT count FROM "telegraf"."default"."disk"')
+        .period(10s)
+        .every(10s)
+        .groupBy('host', 'path')
+        .align()
+    |join(maintlock)
+        .as('disk', 'maintlock')
+        .on('host')
+        .fill(0.0)
+        .tolerance(1s)
+    |default()
+        .field('maintlock.count', 0)
+    |httpOut('TestBatch_JoinOn_Fill')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "disk",
+				Tags:    map[string]string{"host": "A", "path": "/"},
+				Columns: []string{"time", "disk.used_percent", "maintlock.count"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 0, 0, time.UTC),
+						50.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 1, 0, time.UTC),
+						60.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						70.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 3, 0, time.UTC),
+						80.0,
+						1.0,
+					},
+				},
+			},
+			{
+				Name:    "disk",
+				Tags:    map[string]string{"host": "A", "path": "/tmp"},
+				Columns: []string{"time", "disk.used_percent", "maintlock.count"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 0, 0, time.UTC),
+						40.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 1, 0, time.UTC),
+						30.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						20.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 3, 0, time.UTC),
+						10.0,
+						1.0,
+					},
+				},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_JoinOn_Fill", script, 30*time.Second, er, true)
+}
+
+func TestBatch_JoinOn_Fill_Null(t *testing.T) {
+
+	var script = `
+var maintlock = batch
+    |query('SELECT count FROM "db"."rp"."maintlock"')
+        .period(10s)
+        .every(10s)
+        .groupBy('host')
+        .align()
+
+batch
+    |query('SELECT count FROM "telegraf"."default"."disk"')
+        .period(10s)
+        .every(10s)
+        .groupBy('host', 'path')
+        .align()
+    |join(maintlock)
+        .as('disk', 'maintlock')
+        .on('host')
+        .fill('null')
+        .tolerance(1s)
+    |default()
+        .field('maintlock.count', 0)
+    |httpOut('TestBatch_JoinOn_Fill')
+`
+
+	er := kapacitor.Result{
+		Series: imodels.Rows{
+			{
+				Name:    "disk",
+				Tags:    map[string]string{"host": "A", "path": "/"},
+				Columns: []string{"time", "disk.used_percent", "maintlock.count"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 0, 0, time.UTC),
+						50.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 1, 0, time.UTC),
+						60.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						70.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 3, 0, time.UTC),
+						80.0,
+						1.0,
+					},
+				},
+			},
+			{
+				Name:    "disk",
+				Tags:    map[string]string{"host": "A", "path": "/tmp"},
+				Columns: []string{"time", "disk.used_percent", "maintlock.count"},
+				Values: [][]interface{}{
+					{
+						time.Date(1971, 1, 1, 0, 0, 0, 0, time.UTC),
+						40.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 1, 0, time.UTC),
+						30.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 2, 0, time.UTC),
+						20.0,
+						0.0,
+					},
+					{
+						time.Date(1971, 1, 1, 0, 0, 3, 0, time.UTC),
+						10.0,
+						1.0,
+					},
+				},
+			},
+		},
+	}
+
+	testBatcherWithOutput(t, "TestBatch_JoinOn_Fill", script, 30*time.Second, er, true)
 }
 
 // Helper test function for batcher
